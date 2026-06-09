@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: retail-app-deployment
-  namespace: murali-ns
+  namespace: fss-retail
 spec:
   replicas: 4
   selector:
@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
       - name: retail-container
-        image: saiteja2502/userprofileretail:latest
+        image: nanineelapu/fss-retail-app:latest
         ports:
         - containerPort: 3130  # Change to match your app's port
         env:
