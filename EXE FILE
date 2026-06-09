@@ -1,0 +1,42 @@
+
+If Assessment is Shine App — Run This:
+bash# Create retail namespace
+kubectl create namespace retail
+kubectl create namespace argo-rollouts
+
+# Install Argo Rollouts
+kubectl apply -n argo-rollouts \
+  -f https://github.com/argoproj/argo-rollouts/releases/latest/download/install.yaml
+
+# Deploy Shine app
+cd ~/Shine-GitOps-Project
+helm install retail-release ./Retail-chart --namespace retail
+
+# Apply ArgoCD app
+kubectl apply -f argo-application.yml
+
+# Verify
+kubectl get pods -n retail
+argocd app list
+
+If Assessment is FSS App — Run This:
+bash# Create fss-retail namespace
+kubectl create namespace fss-retail
+
+# Apply configmap and secret first
+cd ~/fss-Retail-App_kubernetes
+kubectl apply -f configmap.yaml -n fss-retail
+kubectl create secret generic retail-app-secret \
+  --from-literal=EMAIL_USER=naniatworkmail@gmail.com \
+  --from-literal=EMAIL_PASS=admin \
+  -n fss-retail
+
+# Deploy FSS app
+kubectl apply -f k8s-manifests/
+
+# Apply ArgoCD app
+kubectl apply -f ~/fss-argocd-app.yml
+
+# Verify
+kubectl get pods -n fss-retail
+argocd app list
