@@ -1,0 +1,525 @@
+# 🚀 Shine GitOps Project — Complete Implementation Guide
+### Retail App | EKS + ArgoCD + Argo Rollouts + Datadog + GitHub Actions
+**Cluster:** shineCluster | **Region:** ap-southeast-2 | **Date:** June 09, 2026
+
+---
+
+## 📋 Legend
+| Symbol | Meaning |
+|---|---|
+| ✅ | Done / Success |
+| ❌ | Error / Failed |
+| 🔧 | Fix Applied |
+| 📸 | Screenshot Required |
+| ⚠️ | Warning |
+| 💡 | Important Note |
+
+---
+
+## 🖥️ Your Key Details
+
+| Item | Value |
+|---|---|
+| EC2 IP | `172.31.44.190` |
+| Cluster | `shineCluster` |
+| Region | `ap-southeast-2` |
+| Namespace | `retail` |
+| ArgoCD URL | `a7afb8b95db8148a3ad07d3f1426cf20-342094697.ap-southeast-2.elb.amazonaws.com` |
+| App URL | `http://afe3cf097602c43c69d4029d516a4ea4-1940391722.ap-southeast-2.elb.amazonaws.com:3190` |
+| GitHub Repo | `https://github.com/nanineelapu/Shine-GitOps-Project` |
+
+---
+
+## STEP 1 — EKS Cluster Setup
+
+### ❌ ERROR 1: Cluster Already Exists
+```
+AlreadyExistsException: Stack [eksctl-shineCluster-cluster] already exists
+```
+**Root Cause:** Old broken CloudFormation stack existed but cluster was never fully created.
+
+### 🔧 FIX:
+```bash
+# Delete old broken stack
+eksctl delete cluster --name shineCluster --region ap-southeast-2
+
+# Create fresh cluster
+eksctl create cluster \
+  --name shineCluster \
+  --region ap-southeast-2 \
+  --nodegroup-name shine-nodes \
+  --node-type t3.medium \
+  --nodes 2 \
+  --nodes-min 2 \
+  --nodes-max 2 \
+  --managed \
+  --auto-mode-config-enabled=false
+```
+⏱️ Wait 15-20 minutes for cluster creation.
+
+### ✅ VERIFY:
+```bash
+aws eks update-kubeconfig --name shineCluster --region ap-southeast-2
+kubectl get nodes
+```
+📸 **Screenshot:** 2 nodes showing **Ready**
+
+---
+
+## STEP 2 — Create Namespaces
+
+```bash
+kubectl create namespace retail
+kubectl create namespace argocd
+kubectl create namespace argo-rollouts
+kubectl get ns
+```
+📸 **Screenshot:** Shows `retail`, `argocd`, `argo-rollouts`
+
+---
+
+## STEP 3 — Install ArgoCD
+
+```bash
+kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+
+# Expose as LoadBalancer
+kubectl patch svc argocd-server -n argocd -p '{"spec": {"type": "LoadBalancer"}}'
+
+# Wait for pods
+kubectl get pods -n argocd
+kubectl get svc -n argocd
+```
+
+### ❌ ERROR 2: ArgoCD URL Not Loading
+```
+DNS_PROBE_FINISHED_NXDOMAIN
+This site can't be reached
+```
+**Root Cause:** DNS propagation takes time for new LoadBalancer.
+
+### 🔧 FIX:
+Wait 2-3 minutes for DNS to propagate, then open:
+```
+http://a7afb8b95db8148a3ad07d3f1426cf20-342094697.ap-southeast-2.elb.amazonaws.com
+```
+💡 Use **http** not https
+
+### ✅ Get ArgoCD Password + Login:
+```bash
+# Get initial password
+kubectl -n argocd get secret argocd-initial-admin-secret \
+  -o jsonpath="{.data.password}" | base64 -d
+echo ""
+
+# Update password
+argocd account update-password \
+  --current-password $(kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d) \
+  --new-password Admin@123
+
+# Login CLI
+argocd login a7afb8b95db8148a3ad07d3f1426cf20-342094697.ap-southeast-2.elb.amazonaws.com \
+  --username admin \
+  --password Admin@123 \
+  --insecure
+```
+📸 **Screenshot:** ArgoCD UI showing applications page ✅
+
+---
+
+## STEP 4 — Install Argo Rollouts
+
+```bash
+kubectl apply -n argo-rollouts \
+  -f https://github.com/argoproj/argo-rollouts/releases/latest/download/install.yaml
+
+kubectl get pods -n argo-rollouts
+```
+📸 **Screenshot:** argo-rollouts pod **Running** ✅
+
+---
+
+## STEP 5 — Deploy Helm Chart (retail namespace)
+
+### ❌ ERROR 3: Helm Chart Path Not Found
+```
+Error: INSTALLATION FAILED: path "./helm-charts/userprofile" not found
+```
+**Root Cause:** Wrong folder name — actual folder is `Retail-chart` not `helm-charts/userprofile`.
+
+### 🔧 FIX:
+```bash
+cd ~/Shine-GitOps-Project
+ls  # Found: Retail-chart folder
+helm lint ./Retail-chart
+```
+
+### ❌ ERROR 4: CRDs Not Installed
+```
+no matches for kind "Rollout" in version "argoproj.io/v1alpha1"
+ensure CRDs are installed first
+```
+**Root Cause:** Argo Rollouts CRDs not installed before Helm chart deployment.
+
+### 🔧 FIX:
+```bash
+# Install Argo Rollouts first (CRDs)
+kubectl apply -n argo-rollouts \
+  -f https://github.com/argoproj/argo-rollouts/releases/latest/download/install.yaml
+
+# Wait for pods
+kubectl get pods -n argo-rollouts
+
+# Then install Helm chart
+helm install retail-release ./Retail-chart --namespace retail
+```
+
+### ✅ VERIFY:
+```bash
+helm list -n retail
+kubectl get pods -n retail
+kubectl get svc -n retail
+kubectl get rollout -n retail
+```
+
+**Expected Output:**
+```
+retail-release    retail    1    deployed    ✅
+mongodb-deployment → 1/1 Running ✅
+userprofile-rollout → 1/1 Running ✅
+userprofile-active-service → LoadBalancer with EXTERNAL-IP ✅
+userprofile-preview-service → ClusterIP ✅
+```
+📸 **Screenshot:** All running ✅
+
+---
+
+## STEP 6 — ArgoCD Application (GitOps)
+
+```bash
+# Apply existing argo-application.yml
+kubectl apply -f argo-application.yml
+```
+
+**argo-application.yml contents:**
+```yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: userprofile-blue-green
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/nanineelapu/Shine-GitOps-Project.git
+    targetRevision: main
+    path: Retail-chart
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: retail
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+```
+
+### ✅ VERIFY:
+```bash
+argocd app list
+argocd app get userprofile-blue-green
+```
+📸 **Screenshot:** App showing **Synced + Healthy** ✅
+
+---
+
+## STEP 7 — Install Datadog
+
+### ❌ ERROR 5: Datadog Secret Not Found
+```
+Error: secret "datadog-secret" not found
+Init:CreateContainerConfigError
+```
+**Root Cause:** Datadog API key secret was not created in the cluster.
+
+### 🔧 FIX:
+```bash
+# Create the secret with Datadog API key
+kubectl create secret generic datadog-secret \
+  --from-literal=api-key=YOUR_DATADOG_API_KEY \
+  -n datadog
+```
+💡 Get API key from: `https://app.datadoghq.com` → Organization Settings → API Keys
+
+### Install Datadog:
+```bash
+helm repo add datadog https://helm.datadoghq.com
+helm repo update
+kubectl create namespace datadog
+
+# Create secret
+kubectl -n datadog create secret generic datadog-secret \
+  --from-literal=api-key=YOUR_API_KEY
+
+# Install
+cd ~/Shine-GitOps-Project
+helm install datadog-agent \
+  -f datadog-values.yaml \
+  datadog/datadog \
+  --namespace datadog
+```
+
+**datadog-values.yaml:**
+```yaml
+datadog:
+  site: "ap1.datadoghq.com"
+  clusterName: "shineCluster"
+  apiKeyExistingSecret: "datadog-secret"
+  clusterChecks:
+    enabled: true
+  orchestratorExplorer:
+    enabled: true
+  tags:
+    - "env:prod"
+logs:
+  enabled: true
+  containerCollectAll: true
+registry: "public.ecr.aws/datadog"
+```
+
+### ✅ VERIFY:
+```bash
+kubectl get pods -n datadog
+```
+📸 **Screenshot:** Datadog pods **Running** + Datadog UI showing infrastructure ✅
+
+---
+
+## STEP 8 — AI Troubleshooting Agent
+
+### ❌ ERROR 6: Model Decommissioned
+```
+Error code: 400 - The model `mixtral-8x7b-32768` has been decommissioned
+```
+**Root Cause:** Old Groq model no longer supported.
+
+### 🔧 FIX — Updated ai-troubleshooting-agent.py:
+```bash
+# Fix model in script
+sed -i 's/mixtral-8x7b-32768/llama-3.3-70b-versatile/g' ~/ai-troubleshooting-agent.py
+```
+
+### ✅ Run Agent:
+```bash
+export GROQ_API_KEY="your-groq-key-here"
+python3 ~/ai-troubleshooting-agent.py
+```
+When prompted:
+```
+retail/userprofile-rollout-7c79cc995f-lb7z4
+```
+📸 **Screenshot:** AI agent analyzing pod + Groq response ✅
+
+---
+
+## STEP 9 — GitHub Actions CI/CD
+
+### ❌ ERROR 7: AWS Credentials Not Found
+```
+Error: Credentials could not be loaded from any providers
+```
+**Root Cause:** AWS secrets not added to GitHub repository.
+
+### 🔧 FIX: Add GitHub Secrets
+Go to: GitHub → Settings → Secrets and variables → Actions
+
+| Secret Name | Value |
+|---|---|
+| `AWS_ACCESS_KEY_ID` | Your AWS access key |
+| `AWS_SECRET_ACCESS_KEY` | Your AWS secret key |
+| `AWS_REGION` | `ap-southeast-2` |
+| `ARGOCD_SERVER` | `a7afb8b95db8148a3ad07d3f1426cf20-342094697.ap-southeast-2.elb.amazonaws.com` |
+| `ARGOCD_PASSWORD` | `Admin@123` |
+
+---
+
+### ❌ ERROR 8: Docker Hub Username/Password Required
+```
+Error: Username and password required
+```
+**Root Cause:** Docker Hub secrets not properly configured.
+
+### 🔧 FIX: Switch to ArgoCD-only workflow (no Docker Hub needed):
+
+```bash
+cat > ~/Shine-GitOps-Project/.github/workflows/ci-cd.yml << 'EOF'
+name: CI/CD Pipeline - Shine Retail App
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+
+    - name: Install dependencies
+      run: npm install --if-present
+
+    - name: Lint Helm chart
+      run: |
+        curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+        helm lint ./Retail-chart
+        echo "Helm lint passed!"
+
+    - name: Install ArgoCD CLI
+      run: |
+        curl -sSL -o argocd https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+        chmod +x argocd
+        sudo mv argocd /usr/local/bin/argocd
+
+    - name: Sync ArgoCD Application
+      run: |
+        argocd login ${{ secrets.ARGOCD_SERVER }} \
+          --username admin \
+          --password ${{ secrets.ARGOCD_PASSWORD }} \
+          --insecure
+        argocd app sync userprofile-blue-green --force
+        echo "Pipeline SUCCESS!"
+EOF
+
+git add .github/workflows/ci-cd.yml
+git commit -m "Fix CI/CD - ArgoCD sync only"
+git push origin main --force
+```
+
+### ❌ ERROR 9: ARGOCD_SERVER Secret Empty
+```
+argocd login  \ --username admin --password  --insecure
+Error: Process completed with exit code 1
+```
+**Root Cause:** `ARGOCD_SERVER` secret had wrong/empty value.
+
+### 🔧 FIX:
+Update `ARGOCD_SERVER` secret to:
+```
+a7afb8b95db8148a3ad07d3f1426cf20-342094697.ap-southeast-2.elb.amazonaws.com
+```
+💡 No `http://` prefix, no port number — just hostname!
+
+### ✅ Trigger Pipeline:
+```bash
+cd ~/Shine-GitOps-Project
+echo "# pipeline trigger $(date)" >> README.md
+git add .
+git commit -m "Trigger CI/CD pipeline"
+git push origin main
+```
+📸 **Screenshot:** GitHub Actions showing green checkmark ✅
+
+---
+
+## STEP 10 — Open App in Browser
+
+```
+http://afe3cf097602c43c69d4029d516a4ea4-1940391722.ap-southeast-2.elb.amazonaws.com:3190
+```
+📸 **Screenshot:** App running in browser ✅
+
+---
+
+## 📸 Complete Screenshot Checklist
+
+### Cluster & Nodes
+- [ ] `kubectl get nodes` — 2 nodes Ready
+- [ ] `kubectl get ns` — all namespaces shown
+
+### ArgoCD
+- [ ] `kubectl get pods -n argocd` — all pods Running
+- [ ] `kubectl get svc -n argocd` — LoadBalancer with EXTERNAL-IP
+- [ ] ArgoCD UI — `userprofile-blue-green` Synced + Healthy
+
+### Helm & App
+- [ ] `helm list -n retail` — retail-release deployed
+- [ ] `kubectl get pods -n retail` — 1/1 Running
+- [ ] `kubectl get svc -n retail` — services with IPs
+- [ ] App in browser — LoadBalancer URL
+
+### Argo Rollouts
+- [ ] `kubectl get pods -n argo-rollouts` — Running
+- [ ] `kubectl get rollout -n retail` — userprofile-rollout
+
+### Datadog
+- [ ] `kubectl get pods -n datadog` — agents Running
+- [ ] Datadog UI showing infrastructure/metrics
+
+### AI Agent
+- [ ] Terminal showing AI agent running
+- [ ] AI response analyzing a pod
+
+### GitHub Actions
+- [ ] GitHub Actions tab showing workflow
+- [ ] `.github/workflows/ci-cd.yml` in repo
+- [ ] Green checkmark on workflow run
+
+---
+
+## ⚡ Quick Commands for Assessment Day
+
+```bash
+# 1. Connect to cluster
+aws eks update-kubeconfig --name shineCluster --region ap-southeast-2
+
+# 2. Check everything running
+kubectl get nodes
+kubectl get pods -n retail
+kubectl get pods -n argocd
+kubectl get pods -n argo-rollouts
+kubectl get pods -n datadog
+helm list -n retail
+
+# 3. ArgoCD login
+argocd login a7afb8b95db8148a3ad07d3f1426cf20-342094697.ap-southeast-2.elb.amazonaws.com \
+  --username admin --password Admin@123 --insecure
+argocd app list
+
+# 4. Run AI Agent
+export GROQ_API_KEY="your-key"
+python3 ~/ai-troubleshooting-agent.py
+```
+
+---
+
+## ❌ DO NOT DELETE CLUSTER UNTIL AFTER ASSESSMENT!
+```bash
+# Delete ONLY after assessment is submitted:
+eksctl delete cluster --name shineCluster --region ap-southeast-2
+```
+⚠️ This takes 15-20 minutes and is IRREVERSIBLE!
+
+---
+
+## 📊 Assessment Task Mapping
+
+| Task | What It Is | Status |
+|---|---|---|
+| Task 1 | GitHub Actions CI Pipeline | ✅ Done |
+| Task 2 | EKS Cluster Setup | ✅ Done |
+| Task 3 | ArgoCD GitOps | ✅ Done |
+| Task 4 | Datadog Monitoring | ✅ Done |
+| Task 5 | AI Troubleshooting Agent | ✅ Done |
+| Task 6 | Blue-Green Deployment | ✅ Done |
+
+---
+
+*Good luck with your assessment! 🚀*
